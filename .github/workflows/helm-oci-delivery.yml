@@ -1,0 +1,53 @@
+name: ID.bio Helm Chart OCI Delivery Loop
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'charts/**'
+  workflow_dispatch:
+
+env:
+  OCI_REGISTRY: ghcr.io
+  REGISTRY_REPOSITORY: ${{ github.repository_owner }}/charts/idbio-core
+
+jobs:
+  package-and-publish-helm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout Source Code Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Kubernetes Helm Client Environment
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: Authenticate to Target OCI Registry Terminal
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.OCI_REGISTRY }} \
+            --username ${{ github.actor }} --password-stdin
+
+      - name: Resolve Chart Umbrella Dependencies
+        run: |
+          helm dependency build charts/idbio-core/
+
+      - name: Import Cryptographic GPG Signpost Key
+        run: |
+          echo "${{ secrets.HELM_SIGNING_KEY }}" | gpg --import --batch --yes
+
+      - name: Package ID.bio Core Chart with Provenance Proof Strings
+        run: |
+          mkdir -p dist/
+          helm package charts/idbio-core/ \
+            --destination dist/ \
+            --sign --key "idbio-release-signer" \
+            --keyring ~/.gnupg/pubring.kbx
+
+      - name: Push signed Chart Artifact to OCI Destination Directory
+        run: |
+          CHART_PACKAGE=$(ls dist/*.tgz)
+          helm push ${CHART_PACKAGE} oci://${{ env.OCI_REGISTRY }}/${{ env.REGISTRY_REPOSITORY }}
